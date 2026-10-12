@@ -42,7 +42,15 @@ elseif(NOT USE_SYSTEM_QT)
       continue()
     endif()
 
-    get_target_property(PLUGIN Qt6::${QT_PLUGIN} LOCATION_${CMAKE_BUILD_TYPE})
+    # get_target_property(PLUGIN Qt6::${QT_PLUGIN} LOCATION_${CMAKE_BUILD_TYPE})
+    get_target_property(
+    PLUGIN
+    Qt6::${QT_PLUGIN}     IMPORTED_LOCATION_RELEASE)
+    if(NOT PLUGIN)
+      continue()
+    endif()
+
+
     get_filename_component(FILE_NAME ${PLUGIN} NAME)
     get_filename_component(DIR ${PLUGIN} DIRECTORY)
     get_filename_component(DIR_NAME ${DIR} NAME)

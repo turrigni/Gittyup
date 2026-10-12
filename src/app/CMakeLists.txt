@@ -113,7 +113,11 @@ if(GENERATE_APPDATA)
     COMMENT "Create appdata file")
 endif()
 
-target_link_libraries(gittyup app)
+target_link_libraries(gittyup PRIVATE app)
+
+if(WIN32)
+  target_link_libraries(gittyup PRIVATE Qt6::QWindowsIntegrationPlugin)
+endif()
 
 set_target_properties(
   gittyup
@@ -300,3 +304,4 @@ else()
               ${CMAKE_BINARY_DIR}/Resources/lexers/${SCINTILLUA_LEXER_DEST})
   endforeach()
 endif()
+

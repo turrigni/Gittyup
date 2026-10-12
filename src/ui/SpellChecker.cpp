@@ -1,6 +1,6 @@
 // https://wiki.qt.io/Spell-Checking-with-Hunspell
 
-#include "hunspell.hxx"
+#include <hunspell/hunspell.hxx>
 #include "SpellChecker.h"
 #include <QFile>
 #include <QTextStream>

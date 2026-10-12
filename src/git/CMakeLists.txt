@@ -30,8 +30,6 @@ if(USE_SYSTEM_LIBGIT2)
   target_link_libraries(git ${LIBGIT2_LIBRARIES} gittyupUtil Qt6::Core
                         Qt6::Network)
 else()
-  # we need both libgit2package and libgit2 otherwise we can't find the header
-  # files
   target_link_libraries(git libgit2package libgit2 gittyupUtil Qt6::Core
                         Qt6::Network)
 endif()

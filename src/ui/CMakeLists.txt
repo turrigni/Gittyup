@@ -67,9 +67,9 @@ target_link_libraries(
   dialogs
   editor
   git
-  ${LIBSSH2_LIBRARIES}
+  Libssh2::libssh2
   host
-  hunspell
+  hunspell::hunspell
   index
   loglib
   plugins

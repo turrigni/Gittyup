@@ -1,118 +1,112 @@
-# 3.19+: install(FILES $<TARGET_FILE:...>) in pack/CMakeLists.txt (libssh2.dll).
 cmake_minimum_required(VERSION 3.19)
+
 project(Gittyup)
 
-# Set name and version.
+# --------------------------------------------------
+# Version
+# --------------------------------------------------
+
 set(GITTYUP_NAME "Gittyup")
 set(GITTYUP_EXECUTABLE_NAME "gittyup")
 set(GITTYUP_IDENTIFIER "com.github.Murmele.Gittyup")
 set(GITTYUP_ORGANIZATION_DOMAIN "Murmele.github.com")
+
 set(GITTYUP_VERSION_MAJOR 2)
 set(GITTYUP_VERSION_MINOR 0)
 set(GITTYUP_VERSION_PATCH 0)
+
 set(GITTYUP_VERSION
     "${GITTYUP_VERSION_MAJOR}.${GITTYUP_VERSION_MINOR}.${GITTYUP_VERSION_PATCH}"
 )
 
 string(TIMESTAMP CURR_YEAR "%Y")
 add_compile_definitions(CURR_YEAR=${CURR_YEAR})
-configure_file(${CMAKE_SOURCE_DIR}/LICENSE.md.in ${CMAKE_SOURCE_DIR}/LICENSE.md
-               @ONLY NEWLINE_STYLE UNIX)
 
-# Write version to file so it can be used also from external, for example in the
-# github manifest
+configure_file(
+    ${CMAKE_SOURCE_DIR}/LICENSE.md.in
+    ${CMAKE_SOURCE_DIR}/LICENSE.md
+    @ONLY
+    NEWLINE_STYLE UNIX
+)
+
 file(WRITE "${CMAKE_BINARY_DIR}/Version.txt" ${GITTYUP_VERSION})
 
-set(DEV_BUILD
+# --------------------------------------------------
+# Build info
+# --------------------------------------------------
+
+set(
+    DEV_BUILD
     ""
     CACHE STRING
-          "Mark this build as a development build with the given description")
+    "Mark this build as a development build"
+)
 
 if(DEV_BUILD)
-  set(BUILD_DESCRIPTION " (development build: ${DEV_BUILD})")
+    set(BUILD_DESCRIPTION " (development build: ${DEV_BUILD})")
 else()
-  set(BUILD_DESCRIPTION "")
+    set(BUILD_DESCRIPTION "")
 endif()
 
-# Generate build date.
 string(TIMESTAMP GITTYUP_BUILD_DATE)
 
-# Lookup git revision.
 find_package(Git)
+
 if(GIT_FOUND)
-  execute_process(
-    COMMAND ${GIT_EXECUTABLE} --git-dir=${CMAKE_SOURCE_DIR}/.git show -s
-            --format=%h HEAD
-    OUTPUT_VARIABLE GITTYUP_BUILD_REVISION
-    OUTPUT_STRIP_TRAILING_WHITESPACE)
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE}
+                --git-dir=${CMAKE_SOURCE_DIR}/.git
+                show -s --format=%h HEAD
+        OUTPUT_VARIABLE GITTYUP_BUILD_REVISION
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
 else()
-  set(GITTYUP_BUILD_REVISION "unknown")
+    set(GITTYUP_BUILD_REVISION "unknown")
 endif()
 
-# Explicitly disable shared libraries.
+# --------------------------------------------------
+# General options
+# --------------------------------------------------
+
 set(BUILD_SHARED_LIBS OFF)
 
 option(FLATPAK "Building for flatpak" OFF)
-option(DEBUG_FLATPAK "Building but using flatpak urls for testing" OFF)
-option(ENABLE_UPDATE_OVER_GUI "Enable updating from the Gittyup gui" ON)
-option(USE_SYSTEM_OPENSSL "Use the system-wide OpenSSL installation" ON)
-option(
-  USE_SYSTEM_LIBGIT2
-  "Use the system-wide libgit2 installation (Gittyup requires the current development branch)"
-  OFF)
-option(USE_SYSTEM_LIBSSH2 "Use the system-wide libssh2 installation" ON)
-option(USE_SYSTEM_GIT "Use the system-wide GIT installation" OFF)
-option(USE_SYSTEM_QT "Don't copy QT files into the installation directory" ON)
-option(USE_SYSTEM_LUA "Use the system-wide Lua installation" OFF)
-option(USE_SYSTEM_HUNSPELL "Use the system-wide hunspell installation" OFF)
-option(USE_SYSTEM_CMARK "Use the system-wide cmark installation" OFF)
-option(ENABLE_TESTS "Enable Gittyup Unittests" ON)
+option(DEBUG_FLATPAK "Debug Flatpak" OFF)
+option(ENABLE_UPDATE_OVER_GUI "Enable Updates" ON)
+option(ENABLE_TESTS "Enable Unit Tests" ON)
+option(ENABLE_SHA256 "Enable SHA256 Support" ON)
 
-# Typically system libgit2 does NOT have experimental settings enabled, hence we
-# need to disable SHA256 support
-if(USE_SYSTEM_LIBGIT2)
-  set(_DEFAULT_ENABLE_SHA256 OFF)
-else()
-  set(_DEFAULT_ENABLE_SHA256 ON)
-endif()
-option(ENABLE_SHA256 "Enable SHA256 support within Gittyup"
-       ${_DEFAULT_ENABLE_SHA256})
+# Conan handles these libraries
+set(USE_SYSTEM_LIBSSH2 ON)
+set(USE_SYSTEM_LIBGIT2 OFF)
+set(USE_SYSTEM_LUA OFF)
+set(USE_SYSTEM_HUNSPELL OFF)
+set(USE_SYSTEM_QT OFF)
 
-set(LUA_MODULES_PATH
-    CACHE
-      PATH
-      "Path to the directory with native Lua modules (only relevant if system-wide Lua installation is used)"
-)
+# --------------------------------------------------
+# Language standards
+# --------------------------------------------------
 
-set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${PROJECT_SOURCE_DIR}/cmake")
-include(FindPkgLibraries)
-if(NOT USE_SYSTEM_LIBSSH2)
-  set(USE_SSH
-      "localbuild"
-      CACHE BOOL "Use ssh")
-else()
-  set(USE_SSH
-      ON
-      CACHE BOOL "Use ssh")
-  find_pkglibraries(LIBSSH2 libssh2)
-  if(NOT LIBSSH2_FOUND)
-    find_package(libssh2 1.11 REQUIRED)
-  endif()
-endif()
-
-# Require C++17.
 set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED TRUE)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
 set(CMAKE_C_STANDARD 99)
 
+# --------------------------------------------------
+# Linker flags
+# --------------------------------------------------
+
 if(HAIKU)
-  # qsort_r in libgit2 requires this
-  set(CMAKE_EXE_LINKER_FLAGS -lgnu)
+    set(CMAKE_EXE_LINKER_FLAGS -lgnu)
 elseif(UNIX AND NOT APPLE)
-  set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -ldl")
+    set(CMAKE_EXE_LINKER_FLAGS
+        "${CMAKE_EXE_LINKER_FLAGS} -ldl")
 endif()
 
-# Find Qt modules.
+# --------------------------------------------------
+# Qt
+# --------------------------------------------------
+
 set(QT_MODULES
     Concurrent
     Core
@@ -120,88 +114,105 @@ set(QT_MODULES
     Gui
     Network
     Widgets
-    Test)
+    Test
+)
 
 if(UNIX)
-  set(QT_MODULES ${QT_MODULES} DBus)
-endif()
-
-option(DEBUG_OUTPUT
-       "Print debug output (Only available if debug menu is enabled!)" ON)
-option(DEBUG_OUTPUT_GENERAL "Enable general debug messages" ON)
-option(DEBUG_OUTPUT_REFRESH "Enable debug messages to debug the refresh flow"
-       OFF)
-if(NOT DEBUG_OUTPUT)
-  add_compile_definitions(QT_NO_DEBUG_OUTPUT)
-else()
-  if(DEBUG_OUTPUT_GENERAL)
-    add_compile_definitions(DEBUG_OUTPUT_GENERAL)
-  endif()
-  if(DEBUG_OUTPUT_REFRESH)
-    add_compile_definitions(DEBUG_OUTPUT_REFRESH)
-  endif()
+    list(APPEND QT_MODULES DBus)
 endif()
 
 find_package(
-  Qt6 6.4
-  COMPONENTS ${QT_MODULES} LinguistTools
-  REQUIRED)
-if(FLATPAK)
-  add_compile_definitions(FLATPAK)
+    Qt6 6.6 REQUIRED
+    COMPONENTS
+        ${QT_MODULES}
+        LinguistTools
+)
+
+# --------------------------------------------------
+# Conan packages
+# --------------------------------------------------
+
+find_package(libssh2 REQUIRED CONFIG)
+
+find_package(hunspell REQUIRED CONFIG)
+
+find_package(lua REQUIRED CONFIG)
+
+# --------------------------------------------------
+# Debug options
+# --------------------------------------------------
+
+option(DEBUG_OUTPUT "Enable debug output" ON)
+option(DEBUG_OUTPUT_GENERAL "General debug output" ON)
+option(DEBUG_OUTPUT_REFRESH "Refresh debug output" OFF)
+
+if(NOT DEBUG_OUTPUT)
+    add_compile_definitions(QT_NO_DEBUG_OUTPUT)
+else()
+
+    if(DEBUG_OUTPUT_GENERAL)
+        add_compile_definitions(DEBUG_OUTPUT_GENERAL)
+    endif()
+
+    if(DEBUG_OUTPUT_REFRESH)
+        add_compile_definitions(DEBUG_OUTPUT_REFRESH)
+    endif()
+
 endif()
 
-if(ENABLE_UPDATE_OVER_GUI)
-  add_compile_definitions(ENABLE_UPDATE_OVER_GUI)
+if(FLATPAK)
+    add_compile_definitions(FLATPAK)
 endif()
 
 if(DEBUG_FLATPAK)
-  add_compile_definitions(DEBUG_FLATPAK)
+    add_compile_definitions(DEBUG_FLATPAK)
+endif()
+
+if(ENABLE_UPDATE_OVER_GUI)
+    add_compile_definitions(ENABLE_UPDATE_OVER_GUI)
 endif()
 
 if(ENABLE_SHA256)
-  add_compile_definitions(GIT_EXPERIMENTAL_SHA256)
+    add_compile_definitions(GIT_EXPERIMENTAL_SHA256)
 endif()
 
-if(USE_SYSTEM_LIBGIT2)
-  add_compile_definitions(USE_SYSTEM_LIBGIT2)
-endif()
+# --------------------------------------------------
+# Install paths
+# --------------------------------------------------
 
-include(GNUInstallDirs) # Defines some variables as BINDIR, LIBDIR, ...
-
-set(QT_TRANSLATIONS_DIR "${Qt6_DIR}/../../../translations")
-set(QT_TRANSLATIONS_DIR "/usr/share/qt/translations")
+include(GNUInstallDirs)
 
 if(APPLE)
-  foreach(QT_MODULE ${QT_MODULES})
-    # FIXME: Force debug build to link against release libraries inside of
-    # frameworks on macOS. The Qt debug libraries are broken because their link
-    # dependencies are to the release libraries (e.g. QtGui_debug depends on
-    # QtCore). This causes multiple symbol definition errors at application load
-    # time.
-    get_target_property(LOCATION Qt6::${QT_MODULE} LOCATION)
-    set_target_properties(Qt6::${QT_MODULE} PROPERTIES IMPORTED_LOCATION_DEBUG
-                                                       ${LOCATION})
-  endforeach()
-endif()
 
-if(APPLE)
-  set(CONTENTS_DIR ${GITTYUP_EXECUTABLE_NAME}.app/Contents)
-  set(RESOURCES_DIR ${CONTENTS_DIR}/Resources)
-  set(L10N_INSTALL_DIR ${RESOURCES_DIR}/l10n)
+    set(CONTENTS_DIR ${GITTYUP_EXECUTABLE_NAME}.app/Contents)
+    set(RESOURCES_DIR ${CONTENTS_DIR}/Resources)
+    set(L10N_INSTALL_DIR ${RESOURCES_DIR}/l10n)
+
 elseif(UNIX)
-  set(L10N_INSTALL_DIR ${CMAKE_INSTALL_LOCALEDIR}/${GITTYUP_NAME})
-  set(RESOURCES_DIR ${CMAKE_INSTALL_DATADIR}/${GITTYUP_NAME})
+
+    set(L10N_INSTALL_DIR
+        ${CMAKE_INSTALL_LOCALEDIR}/${GITTYUP_NAME})
+
+    set(RESOURCES_DIR
+        ${CMAKE_INSTALL_DATADIR}/${GITTYUP_NAME})
+
 else()
-  set(L10N_INSTALL_DIR Resources/l10n)
-  set(RESOURCES_DIR Resources)
+
+    set(L10N_INSTALL_DIR Resources/l10n)
+    set(RESOURCES_DIR Resources)
+
 endif()
+
+# --------------------------------------------------
+# Subprojects
+# --------------------------------------------------
 
 add_subdirectory(dep)
 add_subdirectory(src)
 add_subdirectory(l10n)
-add_subdirectory(pack)
+# add_subdirectory(pack)
 
 if(ENABLE_TESTS)
-  enable_testing()
-  add_subdirectory(test)
+    enable_testing()
+    add_subdirectory(test)
 endif()

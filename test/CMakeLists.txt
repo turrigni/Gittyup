@@ -23,22 +23,32 @@ macro(test)
   endif()
 
   if(WIN32)
-    find_package(Qt6Gui 6.6)
     string(REPLACE ";" "\;" NEWPATH "$ENV{PATH}")
-    string(REPLACE ";" "\;" PLUGIN_PATH
-                   "$<TARGET_FILE_DIR:Qt6::QOffscreenIntegrationPlugin>")
+    if(DEFINED ENV{QT_PLUGIN_PATH})
+      set(QT_PLUGIN_ENV "QT_PLUGIN_PATH=$ENV{QT_PLUGIN_PATH};")
+    else()
+      set(QT_PLUGIN_ENV "")
+    endif()
+
+    if(TARGET Qt6::QOffscreenIntegrationPlugin)
+      set(PLATFORM "offscreen")
+      string(REPLACE ";" "\;" PLUGIN_PATH
+                     "$<TARGET_FILE_DIR:Qt6::QOffscreenIntegrationPlugin>")
+      set(PLUGIN_ENV "QT_QPA_PLATFORM_PLUGIN_PATH=${PLUGIN_PATH};")
+    else()
+      set(PLATFORM "windows")
+      set(PLUGIN_ENV "")
+    endif()
 
     if(${ARG_NO_WIN32_OFFSCREEN})
       set(PLATFORM "windows")
-    else()
-      set(PLATFORM "offscreen")
     endif()
 
     set_tests_properties(
       ${ARG_NAME}
       PROPERTIES
         ENVIRONMENT
-        "PATH=${CMAKE_BINARY_DIR}\;${NEWPATH};QT_QPA_PLATFORM_PLUGIN_PATH=${PLUGIN_PATH};QT_QPA_PLATFORM=offscreen"
+        "PATH=${CMAKE_BINARY_DIR}\\;${NEWPATH};${QT_PLUGIN_ENV}${PLUGIN_ENV}QT_QPA_PLATFORM=${PLATFORM}"
     )
   else()
     set_tests_properties(${ARG_NAME} PROPERTIES ENVIRONMENT

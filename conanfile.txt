@@ -1,0 +1,13 @@
+[requires]
+qt/6.6.3
+libssh2/1.11.1
+hunspell/1.7.5
+lua/5.5.0
+
+[generators]
+CMakeDeps
+CMakeToolchain
+
+[options]
+qt/*:qttools=True
+qt/*:qt5compat=True
