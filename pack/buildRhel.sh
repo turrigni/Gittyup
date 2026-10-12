@@ -8,20 +8,6 @@ BUILD_DIR="${BUILD_DIR:-${SOURCE_DIR}/build/release}"
 JOBS="${JOBS:-$(nproc)}"
 INSTALL_PREFIX="${INSTALL_PREFIX:-${HOME}/.local}"
 
-if [[ ! -r /etc/os-release ]]; then
-    printf 'Cannot identify the operating system.\n' >&2
-    exit 1
-fi
-
-source /etc/os-release
-if [[ "${ID:-}" != rhel || "${VERSION_ID%%.*}" != 9 ]]; then
-    printf 'This installer supports RHEL 9 only (detected: %s %s).\n' \
-        "${ID:-unknown}" "${VERSION_ID:-unknown}" >&2
-    exit 1
-fi
-
-
-
 mkdir -p "${BUILD_DIR}"
 BUILD_DIR="$(cd -- "${BUILD_DIR}" && pwd)"
 
@@ -37,6 +23,13 @@ cmake -S "${SOURCE_DIR}" -B "${BUILD_DIR}" \
 
 printf 'Building Gittyup with %s jobs...\n' "${JOBS}"
 cmake --build "${BUILD_DIR}" --parallel "${JOBS}"
+
+# ask for installation
+read -p "Do you want to install Gittyup under ${INSTALL_PREFIX}? [y/N] " response
+if [[ ! "${response,,}" =~ ^(yes|y)$ ]]; then
+    printf 'Installation aborted.\n'
+    exit 0
+fi
 
 printf 'Installing Gittyup under %s...\n' "${INSTALL_PREFIX}"
 cmake --install "${BUILD_DIR}"
