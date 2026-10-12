@@ -4,7 +4,7 @@ set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
-BUILD_DIR="${BUILD_DIR:-${SOURCE_DIR}/build/rhel9-release}"
+BUILD_DIR="${BUILD_DIR:-${SOURCE_DIR}/build/release}"
 JOBS="${JOBS:-$(nproc)}"
 INSTALL_PREFIX="${INSTALL_PREFIX:-${HOME}/.local}"
 
@@ -20,44 +20,7 @@ if [[ "${ID:-}" != rhel || "${VERSION_ID%%.*}" != 9 ]]; then
     exit 1
 fi
 
-if ! command -v dnf >/dev/null 2>&1; then
-    printf 'dnf is required to install build dependencies.\n' >&2
-    exit 1
-fi
 
-if [[ ${EUID} -eq 0 ]]; then
-    SUDO=()
-else
-    if ! command -v sudo >/dev/null 2>&1; then
-        printf 'Run as root or install sudo to install dependencies.\n' >&2
-        exit 1
-    fi
-    SUDO=(sudo)
-fi
-
-# PACKAGES=(
-#     cmake
-#     gcc
-#     gcc-c++
-#     git
-#     libxkbcommon-devel
-#     make
-#     mesa-libGL-devel
-#     openssl-devel
-#     pcre-devel
-#     pkgconf-pkg-config
-#     qt6-qt5compat
-#     qt6-qt5compat-devel
-#     qt6-qtbase-devel
-#     qt6-qttools-devel
-#     zlib-devel
-# )
-
-# printf 'Installing RHEL 9 build and runtime dependencies...\n'
-# "${SUDO[@]}" dnf install -y "${PACKAGES[@]}"
-
-printf 'Initializing Git submodules...\n'
-git -C "${SOURCE_DIR}" submodule update --init --depth 1
 
 mkdir -p "${BUILD_DIR}"
 BUILD_DIR="$(cd -- "${BUILD_DIR}" && pwd)"
