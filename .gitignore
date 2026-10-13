@@ -11,4 +11,4 @@ cmake-build-release/
 compile_commands.json
 .flatpak-builder
 .codegraph
-dep/scintilla/scintilla/
+
