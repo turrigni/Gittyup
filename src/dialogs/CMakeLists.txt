@@ -2,6 +2,7 @@ add_library(
   dialogs
   AboutDialog.cpp
   AccountDialog.cpp
+  AddSubmoduleDialog.cpp
   AddRemoteDialog.cpp
   AmendDialog.cpp
   BranchDelegate.cpp

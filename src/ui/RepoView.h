@@ -278,6 +278,9 @@ public:
              const git::Commit &commitToAmend = git::Commit());
 
   // submodule
+  void addSubmodule(const QString &url, const QString &path, bool initialize,
+                    int depth);
+  void removeSubmodule(const git::Submodule &submodule);
   void resetSubmodules(const QList<git::Submodule> &submodules, bool recursive,
                        git_reset_t type, LogEntry *parent);
   void updateSubmodules(

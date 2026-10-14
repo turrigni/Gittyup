@@ -123,9 +123,11 @@ private:
   QAction *mAbort;
 
   // Submodule
+  QAction *mAddSubmodule;
   QAction *mConfigureSubmodules;
   QAction *mUpdateSubmodules;
   QAction *mInitSubmodules;
+  QMenu *mRemoveSubmodule;
   QMenu *mOpenSubmodule;
 
   // Stash
