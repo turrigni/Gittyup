@@ -44,6 +44,7 @@ public:
   QToolButton *undoButton() const;
   QToolButton *oursButton() const;
   QToolButton *theirsButton() const;
+  QToolButton *bothButton() const;
 
 public slots:
   void setCheckState(git::Index::StagedState state);
@@ -62,6 +63,7 @@ private:
   QToolButton *mUndo = nullptr;
   QToolButton *mOurs = nullptr;
   QToolButton *mTheirs = nullptr;
+  QToolButton *mBoth = nullptr;
 };
 } // namespace _HunkWidget
 
@@ -162,6 +164,7 @@ private:
   void createMarkersAndLineNumbers(const Line &line, int lidx,
                                    Account::FileComments &comments,
                                    int width) const;
+  void chooseBothLines();
 
   /*!
    * \brief setEditorLineInfos
