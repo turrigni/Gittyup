@@ -42,6 +42,7 @@ public:
   QToolButton *undoButton() const;
   QToolButton *oursButton() const;
   QToolButton *theirsButton() const;
+  QToolButton *bothButton() const;
   git::Patch::ConflictResolution resolution() const;
 
 signals:
@@ -72,6 +73,7 @@ private:
   QToolButton *mUndo = nullptr;
   QToolButton *mOurs = nullptr;
   QToolButton *mTheirs = nullptr;
+  QToolButton *mBoth = nullptr;
   git::Patch::ConflictResolution mResolution =
       git::Patch::ConflictResolution::Unresolved;
 };

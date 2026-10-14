@@ -2427,6 +2427,71 @@ RepoView::submoduleResetInfoList(const git::Repository &repo,
   return list;
 }
 
+void RepoView::addSubmodule(const QString &url, const QString &path,
+                            bool initialize, int depth) {
+  if (mWatcher) {
+    connect(mWatcher, &QFutureWatcher<git::Result>::finished, mWatcher,
+            [this, url, path, initialize, depth] {
+              addSubmodule(url, path, initialize, depth);
+            });
+    return;
+  }
+
+  LogEntry *entry = addLogEntry(path, tr("Add Submodule"));
+  mWatcher = new QFutureWatcher<git::Result>(this);
+  connect(mWatcher, &QFutureWatcher<git::Result>::finished, mWatcher,
+          [this, entry, path] {
+            entry->setBusy(false);
+            git::Result result = mWatcher->result();
+            if (mCallbacks->isCanceled()) {
+              entry->addEntry(LogEntry::Error, tr("Add canceled."));
+            } else if (!result) {
+              error(entry, tr("add submodule"), path, result.errorString());
+            } else {
+              mCallbacks->storeDeferredCredentials();
+            }
+
+            mRepo.invalidateSubmoduleCache();
+            mWatcher->deleteLater();
+            mWatcher = nullptr;
+            mCallbacks = nullptr;
+            refresh(false);
+          });
+
+  mCallbacks = new RemoteCallbacks(RemoteCallbacks::Receive, entry, url, path,
+                                   mWatcher, mRepo);
+  entry->setBusy(true);
+  mWatcher->setFuture(QtConcurrent::run(&git::Submodule::add, mRepo, url, path,
+                                        initialize, depth, mCallbacks));
+}
+
+void RepoView::removeSubmodule(const git::Submodule &submodule) {
+  if (mWatcher) {
+    connect(mWatcher, &QFutureWatcher<git::Result>::finished, mWatcher,
+            [this, submodule] { removeSubmodule(submodule); });
+    return;
+  }
+
+  LogEntry *entry = addLogEntry(submodule.path(), tr("Remove Submodule"));
+  mWatcher = new QFutureWatcher<git::Result>(this);
+  connect(mWatcher, &QFutureWatcher<git::Result>::finished, mWatcher,
+          [this, entry, submodule] {
+            entry->setBusy(false);
+            git::Result result = mWatcher->result();
+            if (!result)
+              error(entry, tr("remove submodule"), submodule.path(),
+                    result.errorString());
+
+            mRepo.invalidateSubmoduleCache();
+            mWatcher->deleteLater();
+            mWatcher = nullptr;
+            refresh(false);
+          });
+
+  entry->setBusy(true);
+  mWatcher->setFuture(QtConcurrent::run(&git::Submodule::remove, submodule));
+}
+
 void RepoView::updateSubmodules(const QList<git::Submodule> &submodules,
                                 bool recursive, bool init, bool checkout_force,
                                 LogEntry *parent, bool restoreSelection) {

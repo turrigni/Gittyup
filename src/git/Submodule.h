@@ -47,6 +47,11 @@ public:
   Result update(Remote::Callbacks *callbacks, bool init = false,
                 bool checkout_force = false);
 
+  static Result add(const Repository &repo, const QString &url,
+                    const QString &path, bool initialize, int depth,
+                    Remote::Callbacks *callbacks);
+  Result remove() const;
+
   Repository open() const;
 
 private:

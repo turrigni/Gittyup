@@ -17,6 +17,9 @@ Result::Result(int error) : mError(error) {
   mErrorString = err ? err->message : QString();
 }
 
+Result::Result(int error, const QString &errorString)
+    : mError(error), mErrorString(errorString) {}
+
 QString Result::errorString(const QString &defaultError) const {
   return !mErrorString.isEmpty() ? mErrorString : defaultError;
 }

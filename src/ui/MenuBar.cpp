@@ -24,6 +24,7 @@
 #include "conf/Settings.h"
 #include "cred/CredentialHelper.h"
 #include "dialogs/AboutDialog.h"
+#include "dialogs/AddSubmoduleDialog.h"
 #include "dialogs/CloneDialog.h"
 #include "dialogs/MergeDialog.h"
 #include "dialogs/RemoteDialog.h"
@@ -714,6 +715,19 @@ MenuBar::MenuBar(QWidget *parent) : QMenuBar(parent) {
   // Submodule
   QMenu *submodule = addMenu(tr("Submodule"));
 
+  mAddSubmodule = submodule->addAction(tr("Add..."));
+  connect(mAddSubmodule, &QAction::triggered, [this] {
+    RepoView *view = this->view();
+    AddSubmoduleDialog *dialog = new AddSubmoduleDialog(view);
+    connect(dialog, &QDialog::accepted, [view, dialog] {
+      view->addSubmodule(dialog->url(), dialog->path(), dialog->initialize(),
+                         dialog->depth());
+    });
+    dialog->open();
+  });
+
+  submodule->addSeparator();
+
   mConfigureSubmodules = submodule->addAction(tr("Configure Submodules..."));
   mConfigureSubmodules->setMenuRole(QAction::NoRole);
   configureSubmodulesHotkey.use(mConfigureSubmodules);
@@ -742,6 +756,30 @@ MenuBar::MenuBar(QWidget *parent) : QMenuBar(parent) {
   });
 
   submodule->addSeparator();
+
+  mRemoveSubmodule = submodule->addMenu(tr("Remove"));
+  connect(mRemoveSubmodule, &QMenu::aboutToShow, [this] {
+    mRemoveSubmodule->clear();
+
+    MainWindow *win = qobject_cast<MainWindow *>(window());
+    RepoView *view = win ? win->currentView() : nullptr;
+    if (!view)
+      return;
+
+    for (const git::Submodule &submodule : view->repo().submodules()) {
+      QAction *action = mRemoveSubmodule->addAction(submodule.path());
+      connect(action, &QAction::triggered, [this, view, submodule] {
+        QString prompt =
+            tr("Remove submodule '%1' and permanently delete its local files "
+               "and changes?")
+                .arg(submodule.path());
+        if (QMessageBox::warning(this, tr("Remove Submodule"), prompt,
+                                 QMessageBox::Yes | QMessageBox::Cancel,
+                                 QMessageBox::Cancel) == QMessageBox::Yes)
+          view->removeSubmodule(submodule);
+      });
+    }
+  });
 
   mOpenSubmodule = submodule->addMenu(tr("Open"));
   connect(mOpenSubmodule, &QMenu::aboutToShow, [this] {
@@ -1106,9 +1144,11 @@ void MenuBar::updateSubmodules() {
   QList<git::Submodule> submodules =
       view ? view->repo().submodules() : QList<git::Submodule>();
 
+  mAddSubmodule->setEnabled(view);
   mConfigureSubmodules->setEnabled(view);
   mUpdateSubmodules->setEnabled(!submodules.isEmpty());
   mInitSubmodules->setEnabled(!submodules.isEmpty());
+  mRemoveSubmodule->setEnabled(!submodules.isEmpty());
 
   // FIXME: This doesn't actually work on Mac.
   mOpenSubmodule->setEnabled(!submodules.isEmpty());

@@ -213,11 +213,31 @@ void TestMerge::resolve() {
   mouseClick(ours, Qt::LeftButton, Qt::KeyboardModifiers(), QPoint(),
              inputDelay);
 
+  undo = diffView->widget()->findChild<QToolButton *>("ConflictUndo");
+  QVERIFY(undo);
+  mouseClick(undo, Qt::LeftButton, Qt::KeyboardModifiers(), QPoint(),
+             inputDelay);
+
+  QToolButton *both =
+      diffView->widget()->findChild<QToolButton *>("ConflictBoth");
+  QVERIFY(both);
+  mouseClick(both, Qt::LeftButton, Qt::KeyboardModifiers(), QPoint(),
+             inputDelay);
+
   QToolButton *save =
       diffView->widget()->findChild<QToolButton *>("ConflictSave");
   QVERIFY(save);
   mouseClick(save, Qt::LeftButton, Qt::KeyboardModifiers(), QPoint(),
              inputDelay);
+
+  QFile resolvedFile(mRepo->workdir().filePath("test"));
+  QVERIFY(resolvedFile.open(QFile::ReadOnly));
+  QByteArray resolvedContent = resolvedFile.readAll();
+  QVERIFY(resolvedContent.contains("This is a test."));
+  QVERIFY(resolvedContent.contains("This is a conflict."));
+  QVERIFY(!resolvedContent.contains("<<<<<<<"));
+  QVERIFY(!resolvedContent.contains("======="));
+  QVERIFY(!resolvedContent.contains(">>>>>>>"));
 
   DetailView *detailView = view->findChild<DetailView *>();
   QPushButton *stageAll = nullptr;

@@ -73,6 +73,7 @@ _HunkWidget::Header::Header(const git::Diff &diff, const git::Patch &patch,
       mUndo->setVisible(false);
       mOurs->setEnabled(true);
       mTheirs->setEnabled(true);
+      mBoth->setEnabled(true);
     });
 
     mOurs = new QToolButton(this);
@@ -85,6 +86,7 @@ _HunkWidget::Header::Header(const git::Diff &diff, const git::Patch &patch,
       mUndo->setVisible(true);
       mOurs->setEnabled(false);
       mTheirs->setEnabled(false);
+      mBoth->setEnabled(false);
     });
 
     mTheirs = new QToolButton(this);
@@ -97,6 +99,18 @@ _HunkWidget::Header::Header(const git::Diff &diff, const git::Patch &patch,
       mUndo->setVisible(true);
       mOurs->setEnabled(false);
       mTheirs->setEnabled(false);
+      mBoth->setEnabled(false);
+    });
+
+    mBoth = new QToolButton(this);
+    mBoth->setObjectName("ConflictBoth");
+    mBoth->setText(HunkWidget::tr("Use Both"));
+    connect(mBoth, &QToolButton::clicked, [this] {
+      mSave->setVisible(true);
+      mUndo->setVisible(true);
+      mOurs->setEnabled(false);
+      mTheirs->setEnabled(false);
+      mBoth->setEnabled(false);
     });
   }
 
@@ -125,13 +139,14 @@ _HunkWidget::Header::Header(const git::Diff &diff, const git::Patch &patch,
   QHBoxLayout *buttons = new QHBoxLayout;
   buttons->setContentsMargins(0, 0, 0, 0);
   buttons->setSpacing(4);
-  if (mSave && mUndo && mOurs && mTheirs) {
+  if (mSave && mUndo && mOurs && mTheirs && mBoth) {
     mSave->setVisible(false);
     mUndo->setVisible(false);
     buttons->addWidget(mSave);
     buttons->addWidget(mUndo);
     buttons->addWidget(mOurs);
     buttons->addWidget(mTheirs);
+    buttons->addWidget(mBoth);
     buttons->addSpacing(8);
   }
 
@@ -180,6 +195,8 @@ QToolButton *_HunkWidget::Header::undoButton() const { return mUndo; }
 QToolButton *_HunkWidget::Header::oursButton() const { return mOurs; }
 
 QToolButton *_HunkWidget::Header::theirsButton() const { return mTheirs; }
+
+QToolButton *_HunkWidget::Header::bothButton() const { return mBoth; }
 
 void _HunkWidget::Header::mouseDoubleClickEvent(QMouseEvent *event) {
   if (mButton->isEnabled())
@@ -266,7 +283,9 @@ HunkWidget::HunkWidget(DiffView *view, const git::Diff &diff,
         auto resolution = mPatch.conflictResolution(mIndex);
         if (origin == GIT_DIFF_LINE_CONTEXT ||
             (origin == 'O' && resolution == git::Patch::Ours) ||
-            (origin == 'T' && resolution == git::Patch::Theirs))
+            (origin == 'T' && resolution == git::Patch::Theirs) ||
+            ((origin == 'O' || origin == 'T') &&
+             resolution == git::Patch::Both))
           continue;
 
         int line = mPatch.lineNumber(mIndex, i);
@@ -312,6 +331,15 @@ HunkWidget::HunkWidget(DiffView *view, const git::Diff &diff,
       mEditor->markerDeleteAll(TextEditor::Ours);
       chooseLines(TextEditor::Theirs);
       mPatch.setConflictResolution(mIndex, git::Patch::Theirs);
+    });
+  }
+
+  if (QToolButton *both = mHeader->bothButton()) {
+    connect(both, &QToolButton::clicked, [this] {
+      mEditor->markerDeleteAll(TextEditor::Ours);
+      mEditor->markerDeleteAll(TextEditor::Theirs);
+      chooseBothLines();
+      mPatch.setConflictResolution(mIndex, git::Patch::Both);
     });
   }
 
@@ -801,6 +829,10 @@ void HunkWidget::load(git::Patch &staged, bool force) {
         mHeader->theirsButton()->click();
         break;
 
+      case git::Patch::Both:
+        mHeader->bothButton()->click();
+        break;
+
       case git::Patch::Unresolved:
         break;
     }
@@ -1276,5 +1308,19 @@ void HunkWidget::chooseLines(TextEditor::Marker kind) {
     }
   }
 
+  mEditor->setReadOnly(true);
+}
+
+void HunkWidget::chooseBothLines() {
+  mEditor->setReadOnly(false);
+  int mask = (1 << TextEditor::Context) | (1 << TextEditor::Ours) |
+             (1 << TextEditor::Theirs);
+  for (int i = mEditor->lineCount() - 1; i >= 0; --i) {
+    if (!(mask & mEditor->markerGet(i))) {
+      int pos = mEditor->positionFromLine(i);
+      int length = mEditor->lineLength(i);
+      mEditor->deleteRange(pos, length);
+    }
+  }
   mEditor->setReadOnly(true);
 }

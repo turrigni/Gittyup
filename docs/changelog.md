@@ -1,10 +1,11 @@
-### vX.X.X - 2026-01-07 (DEV)
+### v2.0.1-beta - 2026-10-14 (DEV)
 
-Bug Fix and Feature release
+
 
 #### Added
 
-* Add more information about the credential stores to give the user the possibility to easily see the tradeoffs of every credential store
+Added option BOTHS for conflict resolution
+Added option for add or rmobe submodule
 
 #### Changed
 

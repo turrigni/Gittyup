@@ -25,7 +25,9 @@
 #include <QLocale>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QFile>
 #include <QSaveFile>
+#include <QTextStream>
 
 namespace {
 bool disclosure = false;
@@ -137,6 +139,7 @@ _FileWidget::Header::Header(const git::Diff &diff, const git::Patch &patch,
     mUndo->setVisible(false);
     mOurs->setEnabled(true);
     mTheirs->setEnabled(true);
+    mBoth->setEnabled(true);
     mResolution = git::Patch::ConflictResolution::Unresolved;
   });
 
@@ -149,6 +152,7 @@ _FileWidget::Header::Header(const git::Diff &diff, const git::Patch &patch,
     mUndo->setVisible(true);
     mOurs->setEnabled(false);
     mTheirs->setEnabled(false);
+    mBoth->setEnabled(false);
     mResolution = git::Patch::ConflictResolution::Ours;
   });
 
@@ -161,13 +165,27 @@ _FileWidget::Header::Header(const git::Diff &diff, const git::Patch &patch,
     mUndo->setVisible(true);
     mOurs->setEnabled(false);
     mTheirs->setEnabled(false);
+    mBoth->setEnabled(false);
     mResolution = git::Patch::ConflictResolution::Theirs;
+  });
+
+  mBoth = new QToolButton(this);
+  mBoth->setObjectName("ConflictFileBoth");
+  mBoth->setText(HunkWidget::tr("Use Both"));
+  connect(mBoth, &QToolButton::clicked, [this] {
+    mSave->setVisible(true);
+    mUndo->setVisible(true);
+    mOurs->setEnabled(false);
+    mTheirs->setEnabled(false);
+    mBoth->setEnabled(false);
+    mResolution = git::Patch::ConflictResolution::Both;
   });
 
   buttons->addWidget(mSave);
   buttons->addWidget(mUndo);
   buttons->addWidget(mOurs);
   buttons->addWidget(mTheirs);
+  buttons->addWidget(mBoth);
 
   updatePatch(patch);
 
@@ -268,12 +286,15 @@ void _FileWidget::Header::updatePatch(const git::Patch &patch) {
 
   mOurs->setVisible(isConflicted && showFileSolverButtons);
   mTheirs->setVisible(isConflicted && showFileSolverButtons);
+  mBoth->setVisible(isConflicted && showFileSolverButtons);
 
   mSave->setVisible(mResolution != git::Patch::ConflictResolution::Unresolved);
   mUndo->setVisible(mResolution != git::Patch::ConflictResolution::Unresolved);
   mOurs->setEnabled(mResolution == git::Patch::ConflictResolution::Unresolved);
   mTheirs->setEnabled(mResolution ==
                       git::Patch::ConflictResolution::Unresolved);
+  mBoth->setEnabled(mResolution ==
+                    git::Patch::ConflictResolution::Unresolved);
 
   mDiscardButton->setVisible(mDiff.isStatusDiff() && !mSubmodule &&
                              !isConflicted);
@@ -492,6 +513,44 @@ FileWidget::FileWidget(DiffView *view, const git::Diff &diff,
         return;
       }
 
+      if (resolution == git::Patch::ConflictResolution::Both) {
+        QString path = repo.workdir().filePath(mPatch.name());
+        TextEditor editor;
+        QFile input(path);
+        if (!input.open(QFile::ReadOnly))
+          return;
+        QByteArray content = input.readAll();
+        input.close();
+        editor.load(path, repo.decode(content));
+
+        for (int hunk = mPatch.count() - 1; hunk >= 0; --hunk) {
+          for (int line = mPatch.lineCount(hunk) - 1; line >= 0; --line) {
+            char origin = mPatch.lineOrigin(hunk, line);
+            if (origin != 'L' && origin != 'E' && origin != 'G')
+              continue;
+
+            int lineNumber = mPatch.lineNumber(hunk, line);
+            int position = editor.positionFromLine(lineNumber);
+            editor.deleteRange(position, editor.lineLength(lineNumber));
+          }
+        }
+
+        QSaveFile file(path);
+        if (!file.open(QFile::WriteOnly))
+          return;
+
+        QTextStream out(&file);
+        out.setEncoding(repo.encoding());
+        out << editor.getText(editor.textLength());
+        out.flush();
+        if (!file.commit())
+          return;
+
+        repo.index().setStaged(QStringList{mPatch.name()}, true);
+        RepoView::parentView(this)->refresh();
+        return;
+      }
+
       auto conflict = repo.index().conflict(mPatch.name());
       auto id = resolution == git::Patch::ConflictResolution::Ours
                     ? conflict.ours
@@ -556,6 +615,8 @@ QToolButton *_FileWidget::Header::undoButton() const { return mUndo; }
 QToolButton *_FileWidget::Header::oursButton() const { return mOurs; }
 
 QToolButton *_FileWidget::Header::theirsButton() const { return mTheirs; }
+
+QToolButton *_FileWidget::Header::bothButton() const { return mBoth; }
 
 git::Patch::ConflictResolution _FileWidget::Header::resolution() const {
   return mResolution;

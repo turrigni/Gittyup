@@ -25,7 +25,7 @@ class Repository;
 
 class Patch {
 public:
-  enum ConflictResolution { Unresolved, Ours, Theirs };
+  enum ConflictResolution { Unresolved, Ours, Theirs, Both };
 
   struct LineStats {
     int additions;
