@@ -1,4 +1,4 @@
-### vX.X.X - 2026-01-07 (DEV)
+### v2.0.1-beta - 2026-10-14 (DEV)
 
 Bug Fix and Feature release
 
