@@ -19,12 +19,18 @@
 #include "conf/RecentRepository.h"
 #include "dialogs/AccountDialog.h"
 #include "dialogs/CloneDialog.h"
+#include "git/Repository.h"
+#include "git/Submodule.h"
 #include "host/Accounts.h"
 #include <QAbstractItemModel>
+#include <QDir>
 #include <QFileDialog>
+#include <QFileInfo>
+#include <QHash>
 #include <QMenu>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QSet>
 #include <QSettings>
 #include <QStyledItemDelegate>
 #include <QTreeView>
@@ -33,6 +39,9 @@
 namespace {
 
 const QString kRemoteExpandedGroup = "remote/expanded";
+const QString kOpenExpandedGroup = "open/expanded";
+const QString kRecentExpandedGroup = "recent/expanded";
+const QString kGroupedViewKey = "sidebar/group-repositories";
 
 const QString kStyleSheet = "QTreeView {"
 #ifdef Q_OS_MAC
@@ -51,7 +60,37 @@ enum Role {
   RecentRole,
   AccountRole,
   AccountKindRole,
-  RepositoryRole
+  RepositoryRole,
+  GroupPathRole,
+  OpenGroupPathRole
+};
+
+class OpenGroup : public QObject {
+  Q_OBJECT
+
+public:
+  OpenGroup(const QString &path, QObject *parent = nullptr)
+      : QObject(parent), mPath(path) {}
+
+  QString path() const { return mPath; }
+  QList<RepoView *> children;
+
+private:
+  QString mPath;
+};
+
+class RecentGroup : public QObject {
+  Q_OBJECT
+
+public:
+  RecentGroup(const QString &path, QObject *parent = nullptr)
+      : QObject(parent), mPath(path) {}
+
+  QString path() const { return mPath; }
+  QList<RecentRepository *> children;
+
+private:
+  QString mPath;
 };
 
 class ProgressDelegate : public QStyledItemDelegate {
@@ -104,11 +143,18 @@ public:
     connect(tabs, &TabWidget::tabAboutToBeRemoved, this,
             &RepoModel::beginResetModel);
     connect(tabs, QOverload<>::of(&TabWidget::tabInserted), this,
-            &RepoModel::endResetModel);
+            [this] {
+              rebuildOpenTree();
+              endResetModel();
+            });
     connect(tabs, QOverload<>::of(&TabWidget::tabRemoved), this,
-            &RepoModel::endResetModel);
+            [this] {
+              rebuildOpenTree();
+              endResetModel();
+            });
     connect(tabs->tabBar(), &QTabBar::tabMoved, [this] {
       beginResetModel();
+      rebuildOpenTree();
       endResetModel();
     });
 
@@ -117,10 +163,14 @@ public:
             &RepoModel::beginResetModel);
     connect(repos, &RecentRepositories::repositoryAboutToBeRemoved, this,
             &RepoModel::beginResetModel);
-    connect(repos, &RecentRepositories::repositoryAdded, this,
-            &RepoModel::endResetModel);
-    connect(repos, &RecentRepositories::repositoryRemoved, this,
-            &RepoModel::endResetModel);
+    connect(repos, &RecentRepositories::repositoryAdded, this, [this] {
+      rebuildRecentTree();
+      endResetModel();
+    });
+    connect(repos, &RecentRepositories::repositoryRemoved, this, [this] {
+      rebuildRecentTree();
+      endResetModel();
+    });
 
     Accounts *accounts = Accounts::instance();
     connect(accounts, &Accounts::accountAboutToBeAdded, this,
@@ -154,6 +204,9 @@ public:
                   index(repoIndex, 0, index(accountIndex, 0, index(Remote, 0)));
               emit dataChanged(idx, idx, {Qt::DisplayRole});
             });
+
+    rebuildOpenTree();
+    rebuildRecentTree();
   }
 
   QModelIndex index(int row, int column,
@@ -162,6 +215,25 @@ public:
       return createIndex(row, column);
 
     QObject *ptr = static_cast<QObject *>(parent.internalPointer());
+    if (OpenGroup *group = qobject_cast<OpenGroup *>(ptr)) {
+      if (row >= 0 && row < group->children.size())
+        return createIndex(row, column, group->children.at(row));
+      return QModelIndex();
+    }
+
+    if (RecentGroup *group = qobject_cast<RecentGroup *>(ptr)) {
+      if (row >= 0 && row < group->children.size())
+        return createIndex(row, column, group->children.at(row));
+      return QModelIndex();
+    }
+
+    if (RecentRepository *repo = qobject_cast<RecentRepository *>(ptr)) {
+      const QList<RecentRepository *> children = mRecentChildren.value(repo);
+      if (row >= 0 && row < children.size())
+        return createIndex(row, column, children.at(row));
+      return QModelIndex();
+    }
+
     if (Account *account = qobject_cast<Account *>(ptr)) {
       // repository
       if (account->repositoryCount())
@@ -182,11 +254,15 @@ public:
       case Repo:
         if (!mTabs->count())
           return createIndex(row, column, mTabs);
+        if (mRecentTree)
+          return createIndex(row, column, mOpenRoots.at(row));
         return createIndex(row, column, mTabs->widget(row));
 
       case Recent:
         if (!recent->count())
           return createIndex(row, column, recent);
+        if (mRecentTree)
+          return createIndex(row, column, mRecentRoots.at(row));
         return createIndex(row, column, recent->repository(row));
 
       case Remote:
@@ -203,11 +279,34 @@ public:
     if (!ptr)
       return QModelIndex();
 
-    if (qobject_cast<RepoView *>(ptr) || qobject_cast<TabWidget *>(ptr))
+    if (qobject_cast<OpenGroup *>(ptr))
       return createIndex(Repo, 0);
 
-    if (qobject_cast<RecentRepository *>(ptr) ||
-        qobject_cast<RecentRepositories *>(ptr))
+    if (RepoView *view = qobject_cast<RepoView *>(ptr)) {
+      if (mOpenGroups.contains(view)) {
+        OpenGroup *group = mOpenGroups.value(view);
+        return createIndex(mOpenRoots.indexOf(group), 0, group);
+      }
+      return createIndex(Repo, 0);
+    }
+
+    if (qobject_cast<RecentGroup *>(ptr))
+      return createIndex(Recent, 0);
+
+    if (RecentRepository *repo = qobject_cast<RecentRepository *>(ptr)) {
+      if (mRecentParents.contains(repo))
+        return recentIndex(mRecentParents.value(repo));
+      if (mRecentGroups.contains(repo)) {
+        RecentGroup *group = mRecentGroups.value(repo);
+        return createIndex(mRecentRoots.indexOf(group), 0, group);
+      }
+      return createIndex(Recent, 0);
+    }
+
+    if (qobject_cast<TabWidget *>(ptr))
+      return createIndex(Repo, 0);
+
+    if (qobject_cast<RecentRepositories *>(ptr))
       return createIndex(Recent, 0);
 
     if (qobject_cast<Account *>(ptr) || qobject_cast<Accounts *>(ptr))
@@ -233,6 +332,15 @@ public:
       return 3;
 
     QObject *ptr = static_cast<QObject *>(parent.internalPointer());
+    if (OpenGroup *group = qobject_cast<OpenGroup *>(ptr))
+      return group->children.size();
+
+    if (RecentGroup *group = qobject_cast<RecentGroup *>(ptr))
+      return group->children.size();
+
+    if (RecentRepository *repo = qobject_cast<RecentRepository *>(ptr))
+      return mRecentChildren.value(repo).size();
+
     if (Account *account = qobject_cast<Account *>(ptr)) {
       int count = account->repositoryCount();
       if (count > 0)
@@ -248,11 +356,15 @@ public:
 
     switch (parent.row()) {
       case Repo:
-        return mTabs->count() ? mTabs->count() : 1;
+        if (!mTabs->count())
+          return 1;
+        return mRecentTree ? mOpenRoots.size() : mTabs->count();
 
       case Recent: {
         RecentRepositories *recent = RecentRepositories::instance();
-        return recent->count() ? recent->count() : 1;
+        if (!recent->count())
+          return 1;
+        return mRecentTree ? mRecentRoots.size() : recent->count();
       }
 
       case Remote: {
@@ -272,6 +384,66 @@ public:
   QVariant data(const QModelIndex &index,
                 int role = Qt::DisplayRole) const override {
     QObject *ptr = static_cast<QObject *>(index.internalPointer());
+    if (OpenGroup *group = qobject_cast<OpenGroup *>(ptr)) {
+      switch (role) {
+        case Qt::DisplayRole:
+          return mShowFullPath ? group->path()
+                               : QFileInfo(group->path()).fileName();
+        case Qt::ToolTipRole:
+          return mShowFullPath ? QString() : group->path();
+        case OpenGroupPathRole:
+          return group->path();
+        default:
+          return QVariant();
+      }
+    }
+
+    if (RepoView *view = qobject_cast<RepoView *>(ptr)) {
+      const int tabIndex = mTabs->indexOf(view);
+      const QString path = view->repo().workdir().path();
+      switch (role) {
+        case Qt::DisplayRole:
+          return mShowFullPath ? path : mTabs->tabText(tabIndex);
+        case PathRole:
+          return path;
+        case TabRole:
+          return QVariant::fromValue(view);
+        case Qt::ToolTipRole:
+          return mShowFullPath ? QString() : path;
+        default:
+          return QVariant();
+      }
+    }
+
+    if (RecentGroup *group = qobject_cast<RecentGroup *>(ptr)) {
+      switch (role) {
+        case Qt::DisplayRole:
+          return mShowFullPath ? group->path()
+                               : QFileInfo(group->path()).fileName();
+        case Qt::ToolTipRole:
+          return mShowFullPath ? QString() : group->path();
+        case GroupPathRole:
+          return group->path();
+        default:
+          return QVariant();
+      }
+    }
+
+    if (RecentRepository *recentRepo = qobject_cast<RecentRepository *>(ptr)) {
+      switch (role) {
+        case Qt::DisplayRole:
+          return mShowFullPath ? recentRepo->gitpath() : recentRepo->name();
+        case PathRole:
+          return recentRepo->gitpath();
+        case Qt::ToolTipRole:
+          return mShowFullPath ? QString() : recentRepo->gitpath();
+        case RecentRole:
+          return QVariant::fromValue(recentRepo);
+        default:
+          return QVariant();
+      }
+    }
+
     if (Repository *repo = qobject_cast<Repository *>(ptr)) {
       switch (role) {
         case Qt::DisplayRole:
@@ -520,12 +692,17 @@ public:
 
   Qt::ItemFlags flags(const QModelIndex &index) const override {
     Qt::ItemFlags flags = QAbstractItemModel::flags(index);
-    if (!index.parent().isValid())
+    QObject *ptr = static_cast<QObject *>(index.internalPointer());
+    if (!index.parent().isValid() || qobject_cast<OpenGroup *>(ptr) ||
+        qobject_cast<RecentGroup *>(
+        ptr))
       flags &= ~Qt::ItemIsSelectable;
     return flags;
   }
 
   QModelIndex currentIndex() const {
+    if (mRecentTree && mTabs->currentIndex() >= 0)
+      return openIndex(qobject_cast<RepoView *>(mTabs->currentWidget()));
     return index(mTabs->currentIndex(), 0, index(Repo, 0));
   }
 
@@ -541,10 +718,260 @@ public:
     endResetModel();
   }
 
+  void setRecentTree(bool enabled) {
+    if (mRecentTree == enabled)
+      return;
+
+    beginResetModel();
+    mRecentTree = enabled;
+    rebuildOpenTree();
+    rebuildRecentTree();
+    endResetModel();
+  }
+
+  bool isOpenExpandable(const QModelIndex &index) const {
+    QObject *ptr = static_cast<QObject *>(index.internalPointer());
+    if (OpenGroup *group = qobject_cast<OpenGroup *>(ptr))
+      return !group->children.isEmpty();
+    return false;
+  }
+
+  bool isRecentExpandable(const QModelIndex &index) const {
+    QObject *ptr = static_cast<QObject *>(index.internalPointer());
+    if (RecentGroup *group = qobject_cast<RecentGroup *>(ptr))
+      return !group->children.isEmpty();
+    if (RecentRepository *repo = qobject_cast<RecentRepository *>(ptr))
+      return !mRecentChildren.value(repo).isEmpty();
+    return false;
+  }
+
+  void removeRecent(const QString &path) {
+    RecentRepositories *repos = RecentRepositories::instance();
+    for (int i = 0; i < repos->count(); ++i) {
+      if (repos->repository(i)->gitpath() == path) {
+        repos->remove(i);
+        return;
+      }
+    }
+  }
+
 private:
+  static QString canonicalPath(const QString &path) {
+    QFileInfo info(path);
+    QString canonical = info.canonicalFilePath();
+    if (canonical.isEmpty())
+      canonical = info.absoluteFilePath();
+    canonical = QDir::cleanPath(canonical);
+#ifdef Q_OS_WIN
+    canonical = canonical.toCaseFolded();
+#endif
+    return canonical;
+  }
+
+  void rebuildOpenTree() {
+    qDeleteAll(mOpenGroupObjects);
+    mOpenGroupObjects.clear();
+    mOpenRoots.clear();
+    mOpenGroups.clear();
+
+    if (!mRecentTree) {
+      for (int i = 0; i < mTabs->count(); ++i)
+        mOpenRoots.append(mTabs->widget(i));
+      return;
+    }
+
+    QHash<QString, QList<RepoView *>> directoryGroups;
+    QHash<RepoView *, QString> repositoryDirectories;
+    QHash<QString, QString> directoryPaths;
+    for (int i = 0; i < mTabs->count(); ++i) {
+      RepoView *view = qobject_cast<RepoView *>(mTabs->widget(i));
+      if (!view)
+        continue;
+
+      QString workdir = view->repo().workdir().path();
+      if (workdir.isEmpty())
+        workdir = view->repo().dir(false).path();
+      const QString originalDirectory = QFileInfo(workdir).absolutePath();
+      const QString directory = canonicalPath(originalDirectory);
+      repositoryDirectories.insert(view, directory);
+      directoryGroups[directory].append(view);
+      if (!directoryPaths.contains(directory))
+        directoryPaths.insert(directory, originalDirectory);
+    }
+
+    QSet<QString> addedGroups;
+    for (int i = 0; i < mTabs->count(); ++i) {
+      RepoView *view = qobject_cast<RepoView *>(mTabs->widget(i));
+      if (!view)
+        continue;
+
+      const QString directory = repositoryDirectories.value(view);
+      const QList<RepoView *> groupViews = directoryGroups.value(directory);
+      if (groupViews.size() < 2) {
+        mOpenRoots.append(view);
+        continue;
+      }
+
+      if (addedGroups.contains(directory))
+        continue;
+
+      OpenGroup *group = new OpenGroup(directoryPaths.value(directory), this);
+      group->children = groupViews;
+      mOpenGroupObjects.append(group);
+      mOpenRoots.append(group);
+      addedGroups.insert(directory);
+      for (RepoView *groupView : groupViews)
+        mOpenGroups.insert(groupView, group);
+    }
+  }
+
+  QModelIndex openIndex(RepoView *view) const {
+    if (!view)
+      return QModelIndex();
+    if (mOpenGroups.contains(view)) {
+      OpenGroup *group = mOpenGroups.value(view);
+      return createIndex(group->children.indexOf(view), 0, view);
+    }
+    return createIndex(mOpenRoots.indexOf(view), 0, view);
+  }
+
+  bool createsRecentCycle(RecentRepository *parent,
+                          RecentRepository *child) const {
+    RecentRepository *ancestor = parent;
+    while (ancestor) {
+      if (ancestor == child)
+        return true;
+      ancestor = mRecentParents.value(ancestor, nullptr);
+    }
+    return false;
+  }
+
+  void rebuildRecentTree() {
+    qDeleteAll(mRecentGroupObjects);
+    mRecentGroupObjects.clear();
+    mRecentRoots.clear();
+    mRecentGroups.clear();
+    mRecentParents.clear();
+    mRecentChildren.clear();
+
+    RecentRepositories *repos = RecentRepositories::instance();
+    if (!mRecentTree) {
+      for (int i = 0; i < repos->count(); ++i)
+        mRecentRoots.append(repos->repository(i));
+      return;
+    }
+
+    QHash<QString, RecentRepository *> repositoriesByPath;
+    QHash<RecentRepository *, QString> repositoryWorkdirs;
+    for (int i = 0; i < repos->count(); ++i) {
+      RecentRepository *recentRepo = repos->repository(i);
+      repositoriesByPath.insert(canonicalPath(recentRepo->gitpath()),
+                                recentRepo);
+
+      git::Repository repository = git::Repository::open(recentRepo->gitpath());
+      QString workdir = repository.isValid() ? repository.workdir().path()
+                                             : QString();
+      if (workdir.isEmpty())
+        workdir = recentRepo->gitpath();
+      repositoryWorkdirs.insert(recentRepo, workdir);
+      if (repository.isValid())
+        repositoriesByPath.insert(canonicalPath(workdir), recentRepo);
+    }
+
+    for (int i = 0; i < repos->count(); ++i) {
+      RecentRepository *recentParent = repos->repository(i);
+      git::Repository repository =
+          git::Repository::open(recentParent->gitpath());
+      if (!repository.isValid())
+        continue;
+
+      for (const git::Submodule &submodule : repository.submodules()) {
+        if (!submodule.isInitialized())
+          continue;
+
+        git::Repository childRepository = submodule.open();
+        if (!childRepository.isValid())
+          continue;
+
+        const QString childPath = canonicalPath(childRepository.workdir().path());
+        RecentRepository *recentChild = repositoriesByPath.value(childPath);
+        if (!recentChild || mRecentParents.contains(recentChild) ||
+            createsRecentCycle(recentParent, recentChild))
+          continue;
+
+        mRecentParents.insert(recentChild, recentParent);
+        mRecentChildren[recentParent].append(recentChild);
+      }
+    }
+
+    QHash<QString, QList<RecentRepository *>> directoryGroups;
+    QHash<QString, QString> directoryPaths;
+    for (int i = 0; i < repos->count(); ++i) {
+      RecentRepository *recentRepo = repos->repository(i);
+      if (mRecentParents.contains(recentRepo)) {
+        continue;
+      }
+
+      const QString originalDirectory =
+          QFileInfo(repositoryWorkdirs.value(recentRepo)).absolutePath();
+      const QString directory = canonicalPath(originalDirectory);
+      directoryGroups[directory].append(recentRepo);
+      if (!directoryPaths.contains(directory))
+        directoryPaths.insert(directory, originalDirectory);
+    }
+
+    QSet<QString> addedGroups;
+    for (int i = 0; i < repos->count(); ++i) {
+      RecentRepository *recentRepo = repos->repository(i);
+      if (mRecentParents.contains(recentRepo)) {
+        continue;
+      }
+
+      const QString directory = canonicalPath(
+          QFileInfo(repositoryWorkdirs.value(recentRepo)).absolutePath());
+      const QList<RecentRepository *> groupRepos = directoryGroups.value(directory);
+      if (groupRepos.size() < 2) {
+        mRecentRoots.append(recentRepo);
+        continue;
+      }
+
+      if (addedGroups.contains(directory))
+        continue;
+
+      RecentGroup *group = new RecentGroup(directoryPaths.value(directory), this);
+      group->children = groupRepos;
+      mRecentGroupObjects.append(group);
+      mRecentRoots.append(group);
+      addedGroups.insert(directory);
+      for (RecentRepository *groupRepo : groupRepos)
+        mRecentGroups.insert(groupRepo, group);
+    }
+  }
+
+  QModelIndex recentIndex(RecentRepository *repo) const {
+    if (mRecentParents.contains(repo)) {
+      RecentRepository *parent = mRecentParents.value(repo);
+      return createIndex(mRecentChildren.value(parent).indexOf(repo), 0, repo);
+    }
+    if (mRecentGroups.contains(repo)) {
+      RecentGroup *group = mRecentGroups.value(repo);
+      return createIndex(group->children.indexOf(repo), 0, repo);
+    }
+    return createIndex(mRecentRoots.indexOf(repo), 0, repo);
+  }
+
   TabWidget *mTabs;
   bool mShowFullPath = false;
   bool mShowFullName = false;
+  bool mRecentTree = false;
+  QList<QObject *> mOpenRoots;
+  QList<OpenGroup *> mOpenGroupObjects;
+  QHash<RepoView *, OpenGroup *> mOpenGroups;
+  QList<QObject *> mRecentRoots;
+  QList<RecentGroup *> mRecentGroupObjects;
+  QHash<RecentRepository *, RecentGroup *> mRecentGroups;
+  QHash<RecentRepository *, RecentRepository *> mRecentParents;
+  QHash<RecentRepository *, QList<RecentRepository *>> mRecentChildren;
 
   QIcon mCloudIcon;
   QIcon mErrorIcon;
@@ -552,15 +979,41 @@ private:
 
 // Does this index correspond to one of the open repositories?
 bool isRepoIndex(const QModelIndex &index) {
-  QModelIndex parent = index.parent();
-  return (parent.isValid() && !parent.parent().isValid() &&
-          parent.row() == RepoModel::Repo);
+  return index.data(TabRole).value<RepoView *>() != nullptr;
 }
 
 bool isRemoteIndex(const QModelIndex &index) {
   QModelIndex parent = index.parent();
   return (parent.isValid() && !parent.parent().isValid() &&
           parent.row() == RepoModel::Remote);
+}
+
+void storeRecentExpansion(QTreeView *view, RepoModel *model,
+                          const QModelIndex &index, QSettings &settings);
+void restoreRecentExpansion(QTreeView *view, RepoModel *model,
+                            const QModelIndex &index, QSettings &settings);
+void storeOpenExpansion(QTreeView *view, RepoModel *model,
+                        const QModelIndex &index, QSettings &settings);
+void restoreOpenExpansion(QTreeView *view, RepoModel *model,
+                          const QModelIndex &index, QSettings &settings);
+
+QString treeExpansionKey(const QModelIndex &index) {
+  const QString openGroupPath = index.data(OpenGroupPathRole).toString();
+  if (!openGroupPath.isEmpty()) {
+    const QByteArray encoded = openGroupPath.toUtf8().toBase64(
+        QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals);
+    return "open-group-" + QString::fromLatin1(encoded);
+  }
+
+  const bool isGroup = index.data(GroupPathRole).isValid();
+  const QString path = isGroup ? index.data(GroupPathRole).toString()
+                               : index.data(PathRole).toString();
+  if (path.isEmpty())
+    return QString();
+
+  const QByteArray encoded = path.toUtf8().toBase64(
+      QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals);
+  return (isGroup ? "group-" : "repo-") + QString::fromLatin1(encoded);
 }
 
 void storeExpansionState(QTreeView *view) {
@@ -576,6 +1029,50 @@ void storeExpansionState(QTreeView *view) {
   }
 
   settings.endGroup();
+
+  RepoModel *repoModel = qobject_cast<RepoModel *>(view->model());
+  if (!repoModel)
+    return;
+
+  settings.beginGroup(kOpenExpandedGroup);
+  QModelIndex open = repoModel->index(RepoModel::Repo, 0);
+  for (int i = 0; i < repoModel->rowCount(open); ++i) {
+    QModelIndex index = repoModel->index(i, 0, open);
+    storeOpenExpansion(view, repoModel, index, settings);
+  }
+  settings.endGroup();
+
+  settings.beginGroup(kRecentExpandedGroup);
+  QModelIndex recent = repoModel->index(RepoModel::Recent, 0);
+  for (int i = 0; i < repoModel->rowCount(recent); ++i) {
+    QModelIndex index = repoModel->index(i, 0, recent);
+    storeRecentExpansion(view, repoModel, index, settings);
+  }
+  settings.endGroup();
+}
+
+void storeOpenExpansion(QTreeView *view, RepoModel *model,
+                        const QModelIndex &index, QSettings &settings) {
+  if (!model->isOpenExpandable(index))
+    return;
+
+  const QString key = treeExpansionKey(index);
+  if (!key.isEmpty())
+    settings.setValue(key, view->isExpanded(index));
+}
+
+void storeRecentExpansion(QTreeView *view, RepoModel *model,
+                          const QModelIndex &index, QSettings &settings) {
+  if (!model->isRecentExpandable(index))
+    return;
+
+  const QString key = treeExpansionKey(index);
+  if (key.isEmpty())
+    return;
+
+  settings.setValue(key, view->isExpanded(index));
+  for (int i = 0; i < model->rowCount(index); ++i)
+    storeRecentExpansion(view, model, model->index(i, 0, index), settings);
 }
 
 void restoreExpansionState(QTreeView *view) {
@@ -594,6 +1091,52 @@ void restoreExpansionState(QTreeView *view) {
   }
 
   settings.endGroup();
+
+  RepoModel *repoModel = qobject_cast<RepoModel *>(view->model());
+  if (!repoModel)
+    return;
+
+  settings.beginGroup(kOpenExpandedGroup);
+  QModelIndex open = repoModel->index(RepoModel::Repo, 0);
+  for (int i = 0; i < repoModel->rowCount(open); ++i) {
+    QModelIndex index = repoModel->index(i, 0, open);
+    restoreOpenExpansion(view, repoModel, index, settings);
+  }
+  settings.endGroup();
+
+  settings.beginGroup(kRecentExpandedGroup);
+  QModelIndex recent = repoModel->index(RepoModel::Recent, 0);
+  for (int i = 0; i < repoModel->rowCount(recent); ++i) {
+    QModelIndex index = repoModel->index(i, 0, recent);
+    restoreRecentExpansion(view, repoModel, index, settings);
+  }
+  settings.endGroup();
+}
+
+void restoreOpenExpansion(QTreeView *view, RepoModel *model,
+                          const QModelIndex &index, QSettings &settings) {
+  if (!model->isOpenExpandable(index))
+    return;
+
+  const QString key = treeExpansionKey(index);
+  if (!key.isEmpty())
+    view->setExpanded(index, settings.value(key, false).toBool());
+}
+
+void restoreRecentExpansion(QTreeView *view, RepoModel *model,
+                            const QModelIndex &index, QSettings &settings) {
+  if (!model->isRecentExpandable(index))
+    return;
+
+  const QString key = treeExpansionKey(index);
+  if (key.isEmpty())
+    return;
+
+  view->setExpanded(index, settings.value(key, false).toBool());
+  if (view->isExpanded(index)) {
+    for (int i = 0; i < model->rowCount(index); ++i)
+      restoreRecentExpansion(view, model, model->index(i, 0, index), settings);
+  }
 }
 
 } // namespace
@@ -626,24 +1169,30 @@ SideBar::SideBar(TabWidget *tabs, MainWindow *mainWindow, QWidget *parent)
 
   // Store expansion state when it changes.
   connect(view, &QTreeView::collapsed, [view](const QModelIndex &index) {
-    if (isRemoteIndex(index))
+    if (isRemoteIndex(index) || index.data(PathRole).isValid() ||
+        index.data(GroupPathRole).isValid() ||
+        index.data(OpenGroupPathRole).isValid())
       storeExpansionState(view);
   });
   connect(view, &QTreeView::expanded, [view](const QModelIndex &index) {
-    if (isRemoteIndex(index))
+    if (isRemoteIndex(index) || index.data(PathRole).isValid() ||
+        index.data(GroupPathRole).isValid() ||
+        index.data(OpenGroupPathRole).isValid())
       storeExpansionState(view);
   });
 
   connect(view, &QTreeView::clicked, [tabs](const QModelIndex &index) {
     if (isRepoIndex(index))
-      tabs->setCurrentIndex(index.row());
+      tabs->setCurrentIndex(
+          tabs->indexOf(index.data(TabRole).value<RepoView *>()));
   });
 
   connect(
       view, &QTreeView::doubleClicked,
       [tabs, this, mainWindow](const QModelIndex &index) {
         if (isRepoIndex(index)) {
-          tabs->setCurrentIndex(index.row());
+          tabs->setCurrentIndex(
+              tabs->indexOf(index.data(TabRole).value<RepoView *>()));
           if (Settings::instance()
                   ->value(Setting::Id::AutoHideRepoSiderbar, true)
                   .toBool()) {
@@ -791,7 +1340,7 @@ SideBar::SideBar(TabWidget *tabs, MainWindow *mainWindow, QWidget *parent)
         tab->close();
 
       } else if (index.data(RecentRole).value<RecentRepository *>()) {
-        RecentRepositories::instance()->remove(index.row());
+        model->removeRecent(index.data(PathRole).toString());
 
       } else if (auto account = index.data(AccountRole).value<Account *>()) {
         promptToRemoveAccount(account);
@@ -830,6 +1379,17 @@ SideBar::SideBar(TabWidget *tabs, MainWindow *mainWindow, QWidget *parent)
   QAction *clear = contextMenu->addAction(tr("Clear All Recent"));
   connect(clear, &QAction::triggered,
           [] { RecentRepositories::instance()->clear(); });
+
+    QAction *treeView =
+      contextMenu->addAction(tr("Group Repositories by Directory"));
+    treeView->setObjectName("repositoryTreeMode");
+  treeView->setCheckable(true);
+    treeView->setChecked(settings.value(kGroupedViewKey, false).toBool());
+  model->setRecentTree(treeView->isChecked());
+  connect(treeView, &QAction::toggled, [model](bool checked) {
+    QSettings().setValue(kGroupedViewKey, checked);
+    model->setRecentTree(checked);
+  });
 
   QAction *showFullPath = contextMenu->addAction(tr("Show Full Path"));
   bool recentChecked = settings.value("start/recent/fullpath").toBool();
