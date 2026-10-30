@@ -93,6 +93,69 @@ QUrl parseUrl(const QString &url) {
   return res;
 }
 
+bool hasConfigEntry(const Config &config, const QString &key) {
+  return config.glob(key).next().isValid();
+}
+
+bool hasProxyConfig(const Config &config, const QString &url,
+                    const QString &remoteName) {
+  if (!remoteName.isEmpty() &&
+      hasConfigEntry(config, QString("remote.%1.proxy").arg(remoteName)))
+    return true;
+
+  QUrl parsed(url);
+  QString scheme = parsed.scheme().toLower();
+  if (scheme != "http" && scheme != "https")
+    return false;
+
+  if ((scheme == "http" && parsed.port() == 80) ||
+      (scheme == "https" && parsed.port() == 443))
+    parsed.setPort(-1);
+
+  parsed.setFragment(QString());
+  QString prefix = QString("http.%1://%2")
+                       .arg(scheme, parsed.authority(QUrl::FullyEncoded));
+  QString path = parsed.path(QUrl::FullyEncoded);
+  if (path.isEmpty())
+    path = "/";
+
+  QString query = parsed.query(QUrl::FullyEncoded);
+  while (true) {
+    QString urlConfig = prefix + path;
+    if (!query.isEmpty())
+      urlConfig += "?" + query;
+
+    if (hasConfigEntry(config, urlConfig + ".proxy"))
+      return true;
+
+    if (path == "/")
+      break;
+
+    if (path.endsWith('/')) {
+      path.chop(1);
+    } else {
+      int slash = path.lastIndexOf('/');
+      path = (slash >= 0) ? path.left(slash + 1) : QString("/");
+    }
+
+    if (path.isEmpty())
+      path = "/";
+  }
+
+  return hasConfigEntry(config, "http.proxy");
+}
+
+bool hasProxyEnvironment(const QString &url) {
+  QString scheme = QUrl(url).scheme().toLower();
+  if (scheme == "https")
+    return qEnvironmentVariableIsSet("https_proxy") ||
+           qEnvironmentVariableIsSet("HTTPS_PROXY");
+  if (scheme == "http")
+    return qEnvironmentVariableIsSet("http_proxy") ||
+           qEnvironmentVariableIsSet("HTTP_PROXY");
+  return false;
+}
+
 int pack_progress(int stage, unsigned int current, unsigned int total,
                   void *payload) {
   Remote::Callbacks *cbs = reinterpret_cast<Remote::Callbacks *>(payload);
@@ -548,7 +611,11 @@ Result Remote::fetch(Callbacks *callbacks, bool tags, bool prune) {
   opts.callbacks.remote_ready = &Remote::Callbacks::remoteReady;
   opts.callbacks.payload = callbacks;
 
-  QByteArray proxy = proxyUrl(url(), opts.proxy_opts.type);
+  Repository repo(git_remote_owner(d.data()));
+  const char *name = git_remote_name(d.data());
+  QString remoteName = name ? QString::fromUtf8(name) : QString();
+  QByteArray proxy =
+      proxyUrl(url(), opts.proxy_opts.type, repo, remoteName);
   opts.proxy_opts.url = proxy;
 
   if (tags)
@@ -558,7 +625,7 @@ Result Remote::fetch(Callbacks *callbacks, bool tags, bool prune) {
     opts.prune = GIT_FETCH_PRUNE;
 
   // Write reflog message.
-  QString msg = QString("fetch: %1").arg(name());
+  QString msg = QString("fetch: %1").arg(name);
 
   return git_remote_fetch(d.data(), nullptr, &opts, msg.toUtf8());
 }
@@ -581,7 +648,11 @@ Result Remote::push(Callbacks *callbacks, const QStringList &refspecs) {
   opts.callbacks.push_negotiation = &push_negotiation;
   opts.callbacks.payload = callbacks;
 
-  QByteArray proxy = proxyUrl(url(), opts.proxy_opts.type);
+  Repository repo(git_remote_owner(d.data()));
+  const char *name = git_remote_name(d.data());
+  QString remoteName = name ? QString::fromUtf8(name) : QString();
+  QByteArray proxy =
+      proxyUrl(url(), opts.proxy_opts.type, repo, remoteName);
   opts.proxy_opts.url = proxy;
 
   QVector<char *> raw;
@@ -639,16 +710,29 @@ Result Remote::clone(Callbacks *callbacks, const QString &url,
   opts.fetch_opts.callbacks.payload = callbacks;
   opts.bare = bare;
 
-  QByteArray proxy = proxyUrl(url, opts.fetch_opts.proxy_opts.type);
+    Repository proxyRepo = callbacks ? callbacks->repo() : Repository();
+  QByteArray proxy =
+      proxyUrl(url, opts.fetch_opts.proxy_opts.type, proxyRepo, "origin");
   opts.fetch_opts.proxy_opts.url = proxy;
 
   return git_clone(&repo, url.toUtf8(), path.toUtf8(), &opts);
 }
 
-QByteArray Remote::proxyUrl(const QString &url, git_proxy_t &type) {
+QByteArray Remote::proxyUrl(const QString &url, git_proxy_t &type,
+                            const Repository &repo,
+                            const QString &remoteName) {
   type = GIT_PROXY_AUTO;
 
   QUrl tmp(url);
+  QString scheme = tmp.scheme().toLower();
+  if (scheme != "http" && scheme != "https")
+    return QByteArray();
+
+  Config config = repo.isValid() ? repo.gitConfig() : Config::global();
+  if (hasProxyConfig(config, url, remoteName) ||
+      hasProxyEnvironment(url))
+    return QByteArray();
+
   QNetworkProxyQuery query(tmp);
   QList<QNetworkProxy> proxies =
       QNetworkProxyFactory::systemProxyForQuery(query);

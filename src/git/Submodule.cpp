@@ -11,6 +11,7 @@
 #include "Config.h"
 #include "Id.h"
 #include "Repository.h"
+#include "git2/buffer.h"
 #include <QFile>
 #include <QFileInfo>
 
@@ -38,9 +39,20 @@ bool hasSubmoduleConfig(const Config &config) {
   return config.glob("submodule.*").next().isValid();
 }
 
-} // namespace
+QString resolveSubmoduleUrl(git_repository *repo, const QString &url) {
+  if (!repo)
+    return url;
 
-const QString kUrl = "https://github.com/Murmele/Gittyup";
+  QByteArray encodedUrl = url.toUtf8();
+  git_buf resolved = GIT_BUF_INIT;
+  QString result = url;
+  if (!git_submodule_resolve_url(&resolved, repo, encodedUrl.constData()))
+    result = QString::fromUtf8(resolved.ptr, resolved.size);
+  git_buf_dispose(&resolved);
+  return result;
+}
+
+} // namespace
 
 Submodule::Submodule() {}
 
@@ -124,9 +136,11 @@ Result Submodule::update(Remote::Callbacks *callbacks, bool init,
 
   if (checkout_force)
     opts.checkout_opts.checkout_strategy |= GIT_CHECKOUT_FORCE;
-  // Use a fake URL. Submodule update doesn't have a way to
-  // query a different proxy for each submodule remote.
-  QByteArray proxy = Remote::proxyUrl(kUrl, opts.fetch_opts.proxy_opts.type);
+  Repository submoduleRepo = open();
+  QString remoteUrl =
+      resolveSubmoduleUrl(git_submodule_owner(d.data()), url());
+  QByteArray proxy = Remote::proxyUrl(
+      remoteUrl, opts.fetch_opts.proxy_opts.type, submoduleRepo, "origin");
   opts.fetch_opts.proxy_opts.url = proxy;
 
   return git_submodule_update(d.data(), init, &opts);
@@ -163,7 +177,9 @@ Result Submodule::add(const Repository &repo, const QString &url,
   opts.fetch_opts.depth = depth;
 
   git_proxy_t proxyType = GIT_PROXY_AUTO;
-  QByteArray proxy = Remote::proxyUrl(url, proxyType);
+  QString remoteUrl = resolveSubmoduleUrl(repo, url);
+  QByteArray proxy =
+      Remote::proxyUrl(remoteUrl, proxyType, Repository(), "origin");
   opts.fetch_opts.proxy_opts.type = proxyType;
   opts.fetch_opts.proxy_opts.url = proxy;
 
