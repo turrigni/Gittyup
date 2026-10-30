@@ -195,9 +195,11 @@ QString CustomTheme::styleSheet() const {
 
                  "TabBar::tab {"
                  "  border: none;"
+                 "  border-left: 3px solid palette(highlight);"
                  "  border-right: 1px solid %5;"
                  "  background: %5;"
                  "  color: %6;"
+                 "  font-weight: bold;"
                  "}"
                  "TabBar::tab:selected {"
                  "  background: %7;"

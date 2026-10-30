@@ -336,9 +336,9 @@ HunkWidget::HunkWidget(DiffView *view, const git::Diff &diff,
 
   if (QToolButton *both = mHeader->bothButton()) {
     connect(both, &QToolButton::clicked, [this] {
+      chooseBothLines();
       mEditor->markerDeleteAll(TextEditor::Ours);
       mEditor->markerDeleteAll(TextEditor::Theirs);
-      chooseBothLines();
       mPatch.setConflictResolution(mIndex, git::Patch::Both);
     });
   }
