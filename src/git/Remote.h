@@ -148,7 +148,9 @@ public:
   static Result clone(Callbacks *callbacks, const QString &url,
                       const QString &path, bool bare = false);
 
-  static QByteArray proxyUrl(const QString &url, git_proxy_t &type);
+  static QByteArray proxyUrl(const QString &url, git_proxy_t &type,
+                             const Repository &repo,
+                             const QString &remoteName);
 
   static bool isLoggingEnabled();
   static void setLoggingEnabled(bool enabled);
