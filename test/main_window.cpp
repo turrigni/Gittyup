@@ -14,6 +14,7 @@
 #include "ui/MainWindow.h"
 #include "ui/RepoView.h"
 #include "ui/SideBar.h"
+#include "ui/TabWidget.h"
 #include <QAction>
 #include <QDir>
 #include <QFileInfo>
@@ -65,6 +66,12 @@ void TestMainWindow::recentTree() {
     QVERIFY(source.commit("source commit").isValid());
   }
 
+  git::Remote::Callbacks nestedCallbacks{s2SourcePath};
+  git::Repository s1Source = git::Repository::open(s1SourcePath);
+  QVERIFY(git::Submodule::add(s1Source, s2SourcePath, "nested", true, 0,
+                              &nestedCallbacks));
+  QVERIFY(s1Source.commit("s1 with nested submodule").isValid());
+
   git::Remote::Callbacks callbacks{s1SourcePath};
   git::Repository r1 = git::Repository::init(r1Path);
   git::Repository r2 = git::Repository::init(r2Path);
@@ -79,6 +86,10 @@ void TestMainWindow::recentTree() {
   QVERIFY(git::Submodule::add(r2, s1SourcePath, "s1", true, 0, &callbacks));
   QVERIFY(git::Submodule::add(r2, s2SourcePath, "s2", true, 0, &callbacks));
   QVERIFY(r2.commit("r2 with two submodules").isValid());
+  git::Repository s1Submodule = r2.lookupSubmodule("s1").open();
+  QVERIFY(s1Submodule.isValid());
+  QVERIFY(s1Submodule.lookupSubmodule("nested").update(&nestedCallbacks, true,
+                                                        true));
 
   Test::initRepo(r4);
   QVERIFY(git::Submodule::add(r4, s3SourcePath, "s3", true, 0, &callbacks));
@@ -103,6 +114,12 @@ void TestMainWindow::recentTree() {
 
   QVERIFY(mWindow->addTab(r1Path));
   QVERIFY(mWindow->addTab(r2Path));
+  RepoView *submoduleView =
+      mWindow->addTab(r2.lookupSubmodule("s1").open());
+  QVERIFY(submoduleView);
+  QCOMPARE(mWindow->tabWidget()->tabText(
+               mWindow->tabWidget()->indexOf(submoduleView)),
+           QString("r2/s1"));
   QVERIFY(mWindow->addTab(r3Path));
   QVERIFY(mWindow->addTab(r4Path));
 
