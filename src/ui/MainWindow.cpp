@@ -50,7 +50,8 @@ const QString kLastGeometryKey = "lastGeometry";
 
 class TabName {
 public:
-  TabName(const QString &path) : mPath(path) {}
+  TabName(const QString &path, int sections = 1)
+      : mPath(QDir::fromNativeSeparators(path)), mSections(sections) {}
 
   QString name() const { return mPath.section('/', -mSections); }
 
@@ -62,6 +63,48 @@ private:
   QString mPath;
   int mSections = 1;
 };
+
+QString workdirPath(const git::Repository &repo) {
+  QDir workdir = repo.workdir();
+  QString path = workdir.canonicalPath();
+  return QDir::cleanPath(path.isEmpty() ? workdir.absolutePath() : path);
+}
+
+bool containsPath(const QString &parent, const QString &child) {
+  QString relativePath =
+      QDir::fromNativeSeparators(QDir(parent).relativeFilePath(child));
+  return relativePath != "." && relativePath != ".." &&
+         !relativePath.startsWith("../") &&
+         !QDir::isAbsolutePath(relativePath);
+}
+
+QStringList submodulePath(const git::Repository &repo,
+                          const QString &targetPath) {
+  for (const git::Submodule &submodule : repo.submodules()) {
+    QDir childWorkdir(repo.workdir().filePath(submodule.path()));
+    QString childPath = childWorkdir.canonicalPath();
+    if (childPath.isEmpty())
+      childPath = childWorkdir.absolutePath();
+    childPath = QDir::cleanPath(childPath);
+
+    if (childPath == targetPath)
+      return {submodule.path()};
+
+    if (containsPath(childPath, targetPath)) {
+      git::Repository child = submodule.open();
+      if (!child.isValid())
+        continue;
+
+      QStringList nestedPath = submodulePath(child, targetPath);
+      if (!nestedPath.isEmpty()) {
+        nestedPath.prepend(submodule.path());
+        return nestedPath;
+      }
+    }
+  }
+
+  return {};
+}
 
 } // namespace
 
@@ -488,7 +531,40 @@ void MainWindow::updateTabNames() {
   QList<TabName> fullNames;
 
   for (int i = 0; i < count(); ++i) {
-    TabName name(view(i)->repo().dir(false).path());
+    git::Repository repo = view(i)->repo();
+    QString displayPath = repo.dir(false).path();
+    int sections = 1;
+    QString targetPath = workdirPath(repo);
+    QString rootPath;
+    QStringList modulePath;
+
+    for (int j = 0; j < count(); ++j) {
+      if (i == j)
+        continue;
+
+      git::Repository candidate = view(j)->repo();
+      QString candidatePath = workdirPath(candidate);
+      QString relativePath = QDir::fromNativeSeparators(
+          QDir(candidatePath).relativeFilePath(targetPath));
+      if (relativePath == "." || relativePath == ".." ||
+          relativePath.startsWith("../") ||
+          QDir::isAbsolutePath(relativePath))
+        continue;
+
+      QStringList candidateModulePath = submodulePath(candidate, targetPath);
+      if (!candidateModulePath.isEmpty() &&
+          (rootPath.isEmpty() || candidatePath.length() < rootPath.length())) {
+        rootPath = candidatePath;
+        modulePath = candidateModulePath;
+      }
+    }
+
+    if (!rootPath.isEmpty()) {
+      displayPath = QDir(rootPath).filePath(modulePath.join('/'));
+      sections = modulePath.join('/').count('/') + 2;
+    }
+
+    TabName name(displayPath, sections);
     names[name.name()].append(i);
     fullNames.append(name);
   }
